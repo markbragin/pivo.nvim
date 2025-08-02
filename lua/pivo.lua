@@ -216,7 +216,12 @@ vim.api.nvim_create_autocmd('BufWriteCmd', {
   end
 })
 
-function M.create_new_private_file(opts)
+function M.create_new_encrypted_file(opts)
+  if #opts.fargs == 0 then
+    vim.notify("Pivo: filename required", vim.log.levels.ERROR)
+    return
+  end
+
   if string.len(opts.fargs[1]) == 0 then
     vim.notify("Pivo: filename is empty", vim.log.levels.ERROR)
     return
@@ -332,7 +337,7 @@ function M.unlock_current_file()
   vim.cmd("e")
 end
 
-vim.api.nvim_create_user_command("PivoNew", M.create_new_private_file, {
+vim.api.nvim_create_user_command("PivoNew", M.create_new_encrypted_file, {
   nargs = "*",
 })
 
