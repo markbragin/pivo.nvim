@@ -4,6 +4,8 @@
 
 `pivo.nvim` is a simple plugin for encrypting your files with `gpg`.
 
+![Demo](demo.gif)
+
 ## Requirements
 
 `gpg` - for crypto stuff.
