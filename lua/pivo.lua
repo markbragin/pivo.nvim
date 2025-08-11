@@ -1,5 +1,3 @@
-local io = require("io")
-
 local M = {}
 
 local PASSWORDS = {}
@@ -43,6 +41,8 @@ local prompt_password = function(confirm, silent)
   return pass
 end
 
+--- Whether str ends with suffix
+---
 ---@param str string
 ---@param suffix string
 ---@return boolean
@@ -65,7 +65,6 @@ end
 
 ---Sets current buffer filetype.
 ---If filename ends with EXT (.gpg?) it strips for filetype detection
----
 local set_cur_buf_filetype = function()
   local filename = vim.fn.expand("%:p")
 
@@ -84,35 +83,31 @@ local set_cur_buf_filetype = function()
   end
 end
 
+local get_tmp_filename = function()
+  local proc = vim.system({ "mktemp", "-u" }, { text = true }):wait()
+  if proc.code ~= 0 then
+    return nil
+  end
+  return vim.trim(proc.stdout)
+end
+
 ---@param filename string
 ---@param password string
 local decrypt_file = function(filename, password)
-  local lines = {}
-  local cmd = "gpg --batch --passphrase " .. password .. " -d " .. filename .. " 2>/dev/null; echo \"\n$?\""
+  local cmd = { "gpg", "--batch", "--passphrase", password, "-d", filename }
+  local proc = vim.system(cmd, { text = true }):wait()
 
-  local file = io.popen(cmd)
-  if file == nil then
-    vim.notify("Pivo: failed to execute io.popen(..., \"r\")", vim.log.levels.ERROR)
+  if proc.code ~= 0 then
+    if endswith(vim.trim(proc.stderr), "Bad session key") then
+      vim.notify("Wrong password", vim.log.levels.WARN)
+    else
+      vim.notify("Pivo: failed to execute 'gpg'", vim.log.levels.ERROR)
+    end
     return nil
   end
 
-  if type(file) == "string" then
-    vim.notify("Pivo: failed to execute io.popen(..., \"r\"): " .. file, vim.log.levels.ERROR)
-    return nil
-  end
-
-  for line in file:lines() do
-    table.insert(lines, line)
-  end
-
-  file:close()
-
-  local rc = lines[#lines]
-  table.remove(lines, nil)
-
-  if rc ~= "0" then
-    return nil
-  end
+  local lines = vim.split(proc.stdout, "\n")
+  table.remove(lines)
 
   return lines
 end
@@ -120,27 +115,28 @@ end
 ---@param filename string
 ---@param password string
 local encrypt_buffer = function(filename, password)
-  local cmd = "tmp=$(mktemp -u) &&" ..
-      "gpg --s2k-mode 3 --s2k-count 65011712 --s2k-digest-algo SHA512 --s2k-cipher-algo AES256 " ..
-      "-o $tmp --batch --passphrase " .. password .. " --symmetric - &&" .. "mv $tmp " .. filename
+  local tmpfile = get_tmp_filename()
 
-  local file = io.popen(cmd, "w")
-  if file == nil then
-    vim.notify("Pivo: failed to execute io.popen(..., \"w\")", vim.log.levels.ERROR)
+  if tmpfile == nil then
+    vim.nofity("Pivo: failed to get temp filename", vim.log.levels.ERROR)
     return nil
   end
+
+  local cmd = { "gpg", "--s2k-mode", "3", "--s2k-count", "65011712", "--s2k-digest-algo", "SHA512", "--s2k-cipher-algo",
+    "AES256", "-o", tmpfile, "--batch", "--passphrase", password, "--symmetric", "-" }
 
   local content = vim.api.nvim_buf_get_lines(0, 0, vim.api.nvim_buf_line_count(0), false)
-  local err = file:write(table.concat(content, "\n"))
+  local proc = vim.system(cmd, { stdin = content, text = true }):wait()
 
-  if type(err) == "string" then
-    vim.notify("Pivo: failed to execute io.write(): " .. err, vim.log.levels.ERROR)
-    file:close()
+  if proc.code ~= 0 then
+    vim.notify("Pivo: failed to execute 'gpg'", vim.log.levels.ERROR)
     return nil
   end
 
-  file:flush()
-  file:close()
+  if not vim.uv.fs_rename(tmpfile, filename) then
+    vim.notify("Pivo: failed to move temp file to " .. filename, vim.log.levels.ERROR)
+    return nil
+  end
 
   return true
 end
@@ -192,6 +188,10 @@ vim.api.nvim_create_autocmd('BufWriteCmd', {
   pattern = PATTERN,
   group = GROUP,
   callback = function()
+    if not vim.api.nvim_get_option_value("modified", { scope = "local", buf = 0 }) then
+      return
+    end
+
     local filename = vim.fn.expand("%:p")
     local pass = PASSWORDS[filename]
 
